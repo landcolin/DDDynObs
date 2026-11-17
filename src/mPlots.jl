@@ -1,4 +1,26 @@
-function plot_robot(robo::robot, x::Vector{Float64}, y::Vector{Float64}, type::Int64, k::Int64)
+function format_ascii_tick(v::Real)
+    r = round(v)
+    s = isapprox(v, r; atol = 1e-9) ? string(Int(r)) : string(round(v; digits = 2))
+    return replace(s, '\u2212' => '-')
+end
+
+function apply_publication_style!(fig; tick_fontsize::Union{Int,Nothing}=nothing, grid_margins::Bool=false)
+    plot!(fig,
+        fontfamily     = "Times",
+        tickfontfamily = "Times",
+        xformatter     = format_ascii_tick,
+        yformatter     = format_ascii_tick,
+    )
+    if tick_fontsize !== nothing
+        plot!(fig, xtickfontsize = tick_fontsize, ytickfontsize = tick_fontsize)
+    end
+    if grid_margins
+        plot!(fig, bottom_margin = 5Plots.mm, left_margin = 4Plots.mm)
+    end
+    return fig
+end
+
+function plot_robot(robo::robot, x::Vector{Float64}, y::Vector{Float64}, type::Int64, k::Int64; show_step::Bool=true)
     θ = robo.pose[3]
     p = robo.pose[1:2]
     b = robo.b
@@ -24,13 +46,14 @@ function plot_robot(robo::robot, x::Vector{Float64}, y::Vector{Float64}, type::I
         xlims!((-3.,45.)); ylims!((-17.,25.))
     elseif type == 2
         xlims!((-5.,47.)); ylims!((-13,13))
-        annotate!(6, -10, text("Step $k", :red, :right, 30))
+        show_step && annotate!(6, -10, text("Step $k", "Times", :red, :right, 30))
     else
         xlims!((-10.,35.)); ylims!((-12.,10.))
-        annotate!(0, -10, text("Step $k", :red, :right, 30))
+        show_step && annotate!(0, -10, text("Step $k", "Times", :red, :right, 30))
     end
     plot!([p[1]; x], [p[2];y], label="", linewidth = 2, linecolor = :green, xtickfontsize=24,ytickfontsize=24)
     plot!(robo.traj[1,:], robo.traj[2,:], label="", linewidth = 2, linecolor = :red)
+    apply_publication_style!(fig)
     return fig
 end
 
@@ -47,7 +70,8 @@ function plot_obs(obs::obstacle, Pmean::Matrix{Float64}, Pvar::Matrix{Float64}, 
     plot!(Shape(pts), fillcolor = plot_color(:blue, 0.5), label="")
 
 
-    for i in 1:H
+    H_pred = size(Pmean, 2)
+    for i in 1:H_pred
         δ₁  = φ[i]*sqrt(Pvar[1,i]) 
         δ₂  = φ[i]*sqrt(Pvar[2,i])
         rec = Shape([Pmean[1,i] + δ₁, Pmean[1,i] + δ₁, Pmean[1,i] - δ₁, Pmean[1,i] - δ₁],

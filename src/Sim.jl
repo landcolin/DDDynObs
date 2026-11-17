@@ -1,38 +1,17 @@
-push!(LOAD_PATH, ".")
-dim = 2 
+dim = 2
 T   = 0.1
 H   = 6
 H₊  = 8
 L   = 60
 ns  = 3
 
-
-import Pkg
-using Pkg
-Pkg.activate(@__DIR__)
-
-# Pkg.instantiate()
-
-using Optim, Plots, JuMP, GaussianProcesses, LinearAlgebra, OrdinaryDiffEq, Flux, Random, Ipopt, Distributions
-
-
-
-# Resolve method ambiguity between GaussianProcesses and PDMats for current dependency versions.
-LinearAlgebra.ldiv!(A::GaussianProcesses.PDMats.PDMat, B::LinearAlgebra.AbstractVecOrMat) =
-    LinearAlgebra.ldiv!(A.chol, B)
-LinearAlgebra.ldiv!(A::GaussianProcesses.ElasticPDMats.ElasticPDMat, B::LinearAlgebra.AbstractVecOrMat) =
-    LinearAlgebra.ldiv!(A.chol, B)
-
-
-
+include("environment.jl")
 include("objects.jl")
 include("computing.jl")
 include("MPC.jl")
 include("mPlots.jl")
 
-ENV["GKSwstype"]="nul"
-
-color =  cgrad(:turbo, 2, categorical = true, scale = :lin)
+color = cgrad(:turbo, 2, categorical = true, scale = :lin)
 
 R = 20.
 ℓ = 1.9
@@ -43,30 +22,28 @@ a_min   = -2.
 a_max   =  2.
 pBounds = polyBound(str_ang, v_min, v_max, a_min, a_max)
 
-
 init  = [0., 2., 0., 6.]
 A     = [1. 0; -1. 0.; 0. 1.; 0. -1.]
 b     = [2.3, 2.3, 1., 1.]
 TypeOfObs = 1
 
 test_points = [10, 20, 30, 40, 50]
-obs_traj = zeros(2,L)
-pre_traj = zeros(2,H,L)
+obs_traj = zeros(2, L)
+pre_traj = zeros(2, H, L)
 mse_pre  = zeros(length(test_points))
-
 
 path_to_fig = ""
 if TypeOfObs == 1 #Sinusoid move
     obs   = obstacle(2., [22., 0.], ns)
-    path_to_fig = "figs/sinusoid/"
+    path_to_fig = joinpath(PROJECT_ROOT, "figs", "sinusoid")
 elseif TypeOfObs == 2 #Circle move
     obs   = obstacle(2., [18., -10.], ns)
-    path_to_fig = "figs/circle/"
+    path_to_fig = joinpath(PROJECT_ROOT, "figs", "circle")
 else #Straight move
     obs   = obstacle(2., [15., -15.], ns)
-    path_to_fig = "figs/straight/"
+    path_to_fig = joinpath(PROJECT_ROOT, "figs", "straight")
 end
-isdir(dirname(path_to_fig)) || mkdir(dirname(path_to_fig))
+mkpath(path_to_fig)
 
 robo  = robot(T, H, H₊, R, ℓ, pBounds, init, A, b)
 
@@ -75,63 +52,66 @@ obsGP[1] = GPE(mean = MeanConst(1.), kernel = SEArd([1.], 1.), logNoise = -2.)
 obsGP[2] = GPE(mean = MeanConst(1.), kernel = SEArd([1.], 1.), logNoise = -2.)
 mNN      = Chain(RNN(1 => 16, tanh), Dense(16 => 2, tanh))
 
-
 # Run simulation
 println("Now start the simulation")
+solver_logs = NamedTuple[]
+try
 for k in 1:L
     println("Time instance $k")
 
     run_obs!(obs, k-1, T, TypeOfObs)
 
-    obs_traj[:,k] = obs.posn
+    obs_traj[:, k] = obs.posn
 
-    Ref  = [[6(k+i-1)*T, 2.] for i in 1:H₊]
+    Ref = [[6(k+i-1)*T, 2.] for i in 1:H₊]
 
     if norm(robo.pose[1:2] - obs.posn) < robo.R
         Detection!(robo, obs, obsGP, mNN)
         δme = zeros(dim, ns*H)
         δva = zeros(dim, ns*H)
         for i in 1:dim
-            δme[i,:], δva[i,:] = predictGP(mNN, obsGP[i], k*T .+ T*[x/ns for x in 1:H*ns], i)
+            δme[i, :], δva[i, :] = predictGP(mNN, obsGP[i], k*T .+ T*[x/ns for x in 1:H*ns], i)
         end
 
         # Uncertainty Propagation
-        δme[:,1] += obs.posn
+        δme[:, 1] += obs.posn
         for i in 1:H*ns-1
-            δme[:,i+1] += δme[:,i]
-            δva[:,i+1] += δva[:,i] + [exp(2obsGP[1].logNoise.value), exp(2obsGP[2].logNoise.value)]
+            δme[:, i+1] += δme[:, i]
+            δva[:, i+1] += δva[:, i] + [exp(2obsGP[1].logNoise.value), exp(2obsGP[2].logNoise.value)]
         end
 
-        Pmean = δme[:,[i*ns for i in 1:H]]
-        Pvar  = δva[:,[i*ns for i in 1:H]]
+        Pmean = δme[:, [i*ns for i in 1:H]]
+        Pvar  = δva[:, [i*ns for i in 1:H]]
 
-        pre_traj[:,:,k] = Pmean
+        pre_traj[:, :, k] = Pmean
 
         # Prob = [0.95*0.9^(i-1)  for i in 1:H]
-        Prob = [0.95  for i in 1:H]
-        φ    = [quantile(Normal(0.,1.), (1 + Prob[i])/2)  for i in 1:H]
+        Prob = [0.95 for i in 1:H]
+        φ    = [quantile(Normal(0., 1.), (1 + Prob[i])/2) for i in 1:H]
 
-        x, y, θ, v, tα, a = nMPC_avoid(robo, obs, Ref, Pmean, Pvar, φ)
-        robo.predPose = [x';y';θ';v']
-        fig = plot_robot(robo, x, y, TypeOfObs,k)
+        x, y, θ, v, tα, a = nMPC_avoid(robo, obs, Ref, Pmean, Pvar, φ; step=k, solver_log=solver_logs)
+        robo.predPose = [x'; y'; θ'; v']
+        fig = plot_robot(robo, x, y, TypeOfObs, k)
         plot_obs(obs, Pmean, Pvar, φ)
         display(fig)
-        savefig(fig, string(path, k, ".pdf"))
+        savefig(fig, joinpath(path_to_fig, "$k.pdf"))
         run!(robo, [tα[1], a[1]])
     else
-        x, y, θ, v, tα, a = nMPC_free(robo, Ref)
-        robo.predPose = [x';y';θ';v']
-        fig = plot_robot(robo, x, y, TypeOfObs,k)
+        x, y, θ, v, tα, a = nMPC_free(robo, Ref; step=k, solver_log=solver_logs)
+        robo.predPose = [x'; y'; θ'; v']
+        fig = plot_robot(robo, x, y, TypeOfObs, k)
         plot_obs(obs)
         display(fig)
-        savefig(fig, string(path, k, ".pdf"))
+        savefig(fig, joinpath(path_to_fig, "$k.pdf"))
         run!(robo, [tα[1], a[1]])
     end
 end
-
+finally
+    write_solver_log_csv(joinpath(path_to_fig, "solver_log.csv"), solver_logs)
+end
 
 for (i, v) in enumerate(test_points)
     print(v)
-    mse = sqrt(1/H*sum(norm(obs_traj[:,v+h] - pre_traj[:,h,v])^2 for h in 1:H))
+    mse = sqrt(1/H*sum(norm(obs_traj[:, v+h] - pre_traj[:, h, v])^2 for h in 1:H))
     mse_pre[i] = mse
 end

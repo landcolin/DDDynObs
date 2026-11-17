@@ -57,7 +57,7 @@ function trainNN(mNN::Chain, dataIn::AbstractVector, dataOut::AbstractArray; epo
     numincreases    = 0
     maxnumincreases = 50
 
-    opt_state = Flux.setup(ADAM(1e-2), mNN)
+    opt_state = Flux.setup(Flux.Adam(1e-2), mNN)
 
     for epoch in 1:epochs
         for i in eachindex(X)

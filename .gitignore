@@ -1,3 +1,12 @@
+.julia-local/
+
+## Generated reproduction artifacts
+figs/*/solver_log.csv
+figs/*/trajectory.csv
+output/fig2/
+output/fig3/
+output/fig4/
+
 ## For paper, the main.pdf file which I often use
 *.pdf
 
