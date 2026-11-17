@@ -1,5 +1,4 @@
-push!(LOAD_PATH, ".")
-dim = 2 
+dim = 2
 T   = 0.1
 H   = 6
 H₊  = 8
@@ -7,30 +6,7 @@ L   = 60
 ns  = 3
 
 
-import Pkg
-using Pkg
-Pkg.activate(@__DIR__)
-
-# Pkg.instantiate()
-
-using Optim, Plots, JuMP, GaussianProcesses, LinearAlgebra, OrdinaryDiffEq, Flux, Random, Ipopt, Distributions
-
-
-
-# Resolve method ambiguity between GaussianProcesses and PDMats for current dependency versions.
-LinearAlgebra.ldiv!(A::GaussianProcesses.PDMats.PDMat, B::LinearAlgebra.AbstractVecOrMat) =
-    LinearAlgebra.ldiv!(A.chol, B)
-LinearAlgebra.ldiv!(A::GaussianProcesses.ElasticPDMats.ElasticPDMat, B::LinearAlgebra.AbstractVecOrMat) =
-    LinearAlgebra.ldiv!(A.chol, B)
-
-
-
-include("objects.jl")
-include("computing.jl")
-include("MPC.jl")
-include("mPlots.jl")
-
-ENV["GKSwstype"]="nul"
+include("environment.jl")
 
 color =  cgrad(:turbo, 2, categorical = true, scale = :lin)
 
@@ -66,7 +42,8 @@ else #Straight move
     obs   = obstacle(2., [15., -15.], ns)
     path_to_fig = "figs/straight/"
 end
-isdir(dirname(path_to_fig)) || mkdir(dirname(path_to_fig))
+path_to_fig = normpath(joinpath(@__DIR__, "..", path_to_fig))
+mkpath(path_to_fig)
 
 robo  = robot(T, H, H₊, R, ℓ, pBounds, init, A, b)
 
@@ -116,7 +93,7 @@ for k in 1:L
         fig = plot_robot(robo, x, y, TypeOfObs,k)
         plot_obs(obs, Pmean, Pvar, φ)
         display(fig)
-        savefig(fig, string(path, k, ".pdf"))
+        savefig(fig, joinpath(path_to_fig, "$k.pdf"))
         run!(robo, [tα[1], a[1]])
     else
         x, y, θ, v, tα, a = nMPC_free(robo, Ref)
@@ -124,7 +101,7 @@ for k in 1:L
         fig = plot_robot(robo, x, y, TypeOfObs,k)
         plot_obs(obs)
         display(fig)
-        savefig(fig, string(path, k, ".pdf"))
+        savefig(fig, joinpath(path_to_fig, "$k.pdf"))
         run!(robo, [tα[1], a[1]])
     end
 end

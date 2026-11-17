@@ -1,4 +1,3 @@
-push!(LOAD_PATH, ".")
 dim = 2
 T   = 0.1
 H   = 8
@@ -7,28 +6,10 @@ L   = 70
 ns  = 3
 
 
-import Pkg
-using Pkg
-Pkg.activate(@__DIR__)
+include("environment.jl")
 
-Pkg.instantiate()
-
-using Optim, Plots, JuMP, GaussianProcesses, LinearAlgebra, OrdinaryDiffEq, Flux, Random, Ipopt, Distributions
-
-
-# Resolve method ambiguity between GaussianProcesses and PDMats for current dependency versions.
-LinearAlgebra.ldiv!(A::GaussianProcesses.PDMats.PDMat, B::LinearAlgebra.AbstractVecOrMat) =
-    LinearAlgebra.ldiv!(A.chol, B)
-LinearAlgebra.ldiv!(A::GaussianProcesses.ElasticPDMats.ElasticPDMat, B::LinearAlgebra.AbstractVecOrMat) =
-    LinearAlgebra.ldiv!(A.chol, B)
-
-
-include("objects.jl")
-include("computing.jl")
-include("MPC.jl")
-include("mPlots.jl")
-
-ENV["GKSwstype"] = "nul"
+path_to_fig = normpath(joinpath(@__DIR__, "..", "figs", "mobs"))
+mkpath(path_to_fig)
 
 
 function run_obs_topdown!(obs::obstacle, k::Int64, τ::Float64)
@@ -288,7 +269,7 @@ for k in 1:L
             end
         end
         display(fig)
-        savefig(fig, string("figs/mobs/", k, ".pdf"))
+        savefig(fig, joinpath(path_to_fig, "$k.pdf"))
         run!(robo, [tα[1], a[1]])
     else
         x, y, θ, v, tα, a = nMPC_free(robo, Ref)
@@ -299,7 +280,7 @@ for k in 1:L
             plot_obs_multi!(obs)
         end
         display(fig)
-        savefig(fig, string("figs/mobs/", k, ".pdf"))
+        savefig(fig, joinpath(path_to_fig, "$k.pdf"))
         run!(robo, [tα[1], a[1]])
     end
 end
