@@ -1,4 +1,4 @@
-function plot_robot(robo::robot, x::Vector{Float64}, y::Vector{Float64}, type::Int64, k::Int64)
+function plot_robot(robo::robot, x::Vector{Float64}, y::Vector{Float64}, type::Int64, k::Int64; annotate_step=true)
     θ = robo.pose[3]
     p = robo.pose[1:2]
     b = robo.b
@@ -24,10 +24,10 @@ function plot_robot(robo::robot, x::Vector{Float64}, y::Vector{Float64}, type::I
         xlims!((-3.,45.)); ylims!((-17.,25.))
     elseif type == 2
         xlims!((-5.,47.)); ylims!((-13,13))
-        annotate!(6, -10, text("Step $k", :red, :right, 30))
+        annotate_step && annotate!(6, -10, text("Step $k", :red, :right, 30))
     else
         xlims!((-10.,35.)); ylims!((-12.,10.))
-        annotate!(0, -10, text("Step $k", :red, :right, 30))
+        annotate_step && annotate!(0, -10, text("Step $k", :red, :right, 30))
     end
     plot!([p[1]; x], [p[2];y], label="", linewidth = 2, linecolor = :green, xtickfontsize=24,ytickfontsize=24)
     plot!(robo.traj[1,:], robo.traj[2,:], label="", linewidth = 2, linecolor = :red)

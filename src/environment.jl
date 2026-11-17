@@ -15,4 +15,5 @@ LinearAlgebra.ldiv!(A::GaussianProcesses.ElasticPDMats.ElasticPDMat, B::LinearAl
 include("objects.jl")
 include("computing.jl")
 include("MPC.jl")
+include("MultiObstacle.jl")
 include("mPlots.jl")

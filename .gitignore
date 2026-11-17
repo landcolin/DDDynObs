@@ -337,3 +337,8 @@ codegen/
 
 # Octave session info
 octave-workspace
+
+# Generated simulation figures, checkpoints, and diagnostics
+output/fig2/
+output/fig3/
+output/fig4/

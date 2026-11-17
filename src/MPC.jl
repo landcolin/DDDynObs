@@ -1,4 +1,14 @@
-function nMPC_avoid(robo::robot, obs::obstacle, ref::Vector{Vector{Float64}}, Pmean::Matrix{Float64}, Pvar::Matrix{Float64}, φ::Vector{Float64})
+function check_mpc_solution!(opti; diagnostics=nothing)
+    solved = is_solved_and_feasible(opti)
+    if diagnostics !== nothing
+        push!(diagnostics, (status=string(termination_status(opti)),
+                            primal_status=string(primal_status(opti)),
+                            feasible=solved, solve_time=solve_time(opti)))
+    end
+    solved || error("MPC solve failed: $(termination_status(opti)), $(primal_status(opti))")
+end
+
+function nMPC_avoid(robo::robot, obs::obstacle, ref::Vector{Vector{Float64}}, Pmean::Matrix{Float64}, Pvar::Matrix{Float64}, φ::Vector{Float64}; diagnostics=nothing)
     
     opti  = JuMP.Model(Ipopt.Optimizer)
     set_silent(opti)
@@ -27,7 +37,7 @@ function nMPC_avoid(robo::robot, obs::obstacle, ref::Vector{Vector{Float64}}, Pm
     @variable(opti, y[i=1:H₊], start = y₀[i])
     θ₀ = robo.predPose[3,:]
     @variable(opti, θ[i=1:H₊], start = θ₀[i])
-    v₀ = robo.predPose[3,:]
+    v₀ = robo.predPose[4,:]
     @variable(opti, v[i = 1:H₊], start = v₀[i])
 
     @variable(opti, tα[1:H₊])
@@ -54,12 +64,12 @@ function nMPC_avoid(robo::robot, obs::obstacle, ref::Vector{Vector{Float64}}, Pm
         if i == 1
             @constraint(opti, x[i] == state[1] + τ*state[4]*cos(state[3]))
             @constraint(opti, y[i] == state[2] + τ*state[4]*sin(state[3]))
-            @constraint(opti, θ[i] == state[3] + τ*tα[i]/ℓ)
+            @constraint(opti, θ[i] == state[3] + τ*state[4]*tα[i]/ℓ)
             @constraint(opti, v[i] == state[4] + τ*a[i])
         else
             @constraint(opti, x[i] == x[i-1] + τ*v[i-1]*cos(θ[i-1]))
             @constraint(opti, y[i] == y[i-1] + τ*v[i-1]*sin(θ[i-1]))
-            @constraint(opti, θ[i] == θ[i-1] + τ*tα[i]/ℓ)
+            @constraint(opti, θ[i] == θ[i-1] + τ*v[i-1]*tα[i]/ℓ)
             @constraint(opti, v[i] == v[i-1] + τ*a[i])
         end
     end
@@ -79,7 +89,7 @@ function nMPC_avoid(robo::robot, obs::obstacle, ref::Vector{Vector{Float64}}, Pm
 
 
     JuMP.optimize!(opti)
-    # print(is_solved_and_feasible(opti))
+    check_mpc_solution!(opti; diagnostics)
 
     x  = JuMP.value.(x)
     y  = JuMP.value.(y)
@@ -91,7 +101,7 @@ function nMPC_avoid(robo::robot, obs::obstacle, ref::Vector{Vector{Float64}}, Pm
     return x, y, θ, v, tα, a
 end
 
-function nMPC_free(robo::robot, ref::Vector{Vector{Float64}})
+function nMPC_free(robo::robot, ref::Vector{Vector{Float64}}; diagnostics=nothing)
 
     opti = JuMP.Model(Ipopt.Optimizer)
     set_silent(opti)
@@ -119,18 +129,18 @@ function nMPC_free(robo::robot, ref::Vector{Vector{Float64}})
         if i == 1
             @constraint(opti, x[i] == state[1] + τ*state[4]*cos(state[3]))
             @constraint(opti, y[i] == state[2] + τ*state[4]*sin(state[3]))
-            @constraint(opti, θ[i] == state[3] + τ*tα[i]/ℓ)
+            @constraint(opti, θ[i] == state[3] + τ*state[4]*tα[i]/ℓ)
             @constraint(opti, v[i] == state[4] + τ*a[i])
         else
             @constraint(opti, x[i] == x[i-1] + τ*v[i-1]*cos(θ[i-1]))
             @constraint(opti, y[i] == y[i-1] + τ*v[i-1]*sin(θ[i-1]))
-            @constraint(opti, θ[i] == θ[i-1] + τ*tα[i]/ℓ)
+            @constraint(opti, θ[i] == θ[i-1] + τ*v[i-1]*tα[i]/ℓ)
             @constraint(opti, v[i] == v[i-1] + τ*a[i])
         end
     end
 
     JuMP.optimize!(opti)
-    print(is_solved_and_feasible(opti))
+    check_mpc_solution!(opti; diagnostics)
 
     return JuMP.value.(x), JuMP.value.(y), JuMP.value.(θ), JuMP.value.(v), JuMP.value.(tα), JuMP.value.(a)
     

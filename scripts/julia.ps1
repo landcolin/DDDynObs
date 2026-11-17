@@ -1,6 +1,6 @@
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('setup', 'check', 'single', 'multi', 'repl')]
+    [ValidateSet('setup', 'check', 'single', 'multi', 'fig2', 'fig3', 'fig4', 'repl')]
     [string]$Task = 'repl',
     [string]$JuliaExecutable = $env:JULIA_EXE
 )
@@ -44,6 +44,9 @@ switch ($Task) {
     'check'  { $arguments += Join-Path $PSScriptRoot 'check_environment.jl' }
     'single' { $arguments += Join-Path $projectPath 'Sim.jl' }
     'multi'  { $arguments += Join-Path $projectPath 'Sim_mobs.jl' }
+    'fig2'   { $arguments += Join-Path $projectPath 'Fig2.jl' }
+    'fig3'   { $arguments += Join-Path $projectPath 'Fig3.jl' }
+    'fig4'   { $arguments += Join-Path $projectPath 'Fig4.jl' }
 }
 & $JuliaExecutable @arguments
 if ($LASTEXITCODE -ne 0) { throw "Julia task '$Task' failed with exit code $LASTEXITCODE." }

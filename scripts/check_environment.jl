@@ -18,6 +18,14 @@ function check_environment()
     @assert isapprox(robo.pose[1], 0.6; atol=1e-3)
     println("\nPASS: JuMP/Ipopt optimization and OrdinaryDiffEq integration")
 
+    turning_robot = deepcopy(robo)
+    turning_ref = [[robo.pose[1] + 6i * robo.T, 2.0 + 0.15i] for i in 1:robo.H₊]
+    _, _, predicted_yaw, _, turn, accel = nMPC_free(turning_robot, turning_ref)
+    @assert abs(turn[1]) > 1e-3
+    run!(turning_robot, [turn[1], accel[1]])
+    @assert isapprox(turning_robot.pose[3], predicted_yaw[1]; atol=0.02)
+    println("PASS: MPC turning prediction agrees with simulated yaw")
+
     obs = obstacle(2.0, [10.0, 0.0], 3)
     gps = GPBase[GPE(mean=MeanConst(1.0), kernel=SEArd([1.0], 1.0), logNoise=-2.0) for _ in 1:2]
     network = Chain(RNN(1 => 16, tanh), Dense(16 => 2, tanh))
@@ -43,6 +51,20 @@ function check_environment()
     solution = nMPC_avoid(robo, obs, ref, pmean, pvar, φ)
     @assert all(values -> all(isfinite, values), solution)
     println("PASS: obstacle-avoidance optimization")
+
+    multi_robot = deepcopy(robo)
+    multi_obstacles = [obstacle(2.0, [20.0, 6.0], 3), obstacle(2.0, [20.0, -6.0], 3)]
+    multi_means = [repeat(obs.posn, 1, robo.H) for obs in multi_obstacles]
+    multi_variances = [fill(1e-3, 2, robo.H) for _ in multi_obstacles]
+    multi_diagnostics = Any[]
+    multi_solution = nMPC_avoid_multi(multi_robot, multi_obstacles, turning_ref, multi_means, multi_variances, φ;
+                                    diagnostics=multi_diagnostics)
+    @assert all(values -> all(isfinite, values), multi_solution)
+    @assert only(multi_diagnostics).feasible
+    @assert abs(multi_solution[5][1]) > 1e-3
+    run!(multi_robot, [multi_solution[5][1], multi_solution[6][1]])
+    @assert isapprox(multi_robot.pose[3], multi_solution[3][1]; atol=0.02)
+    println("PASS: two-obstacle MPC and simulated turning agree")
 
     mktempdir() do output
         fig = plot_robot(robo, x, y, 1, 1)
