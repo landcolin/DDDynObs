@@ -20,8 +20,8 @@ end
 
 mutable struct robot
     T::Float64             # Sampling time
-    H::Integer             # Horizon length
-    H₊::Integer            # Horizon length
+    H::Integer             # Obstacle prediction evaluation horizon
+    H₊::Integer            # MPC planning horizon
     R::Float64             # Detection range
     ℓ::Float64             # distance between two wheels
     pBnd::polyBound        # Physical limit
@@ -53,6 +53,8 @@ mutable struct robot
         return obj
     end
 end
+
+forecast_horizon(robo::robot) = max(robo.H, robo.H₊)
 
 mutable struct obstacle
     r::Float64 #radius

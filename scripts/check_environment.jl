@@ -1,7 +1,7 @@
 println("Loading project dependencies with Julia ", VERSION)
 flush(stdout)
 include(joinpath(@__DIR__, "..", "src", "environment.jl"))
-H = 6  # Plotting functions use the same horizon as the simulation entry points.
+using Test: @test_throws
 
 function check_obstacle_noise()
     T = 0.1
@@ -42,7 +42,8 @@ function check_prediction_timing(robo, network, ns)
     positions, variances = predict_obstacle!(robo, obs, gps, network, 0)
     @assert all(gp -> isempty(gp.y), gps)
     @assert all(isfinite, variances) && all(>=(0), variances)
-    for h in 1:robo.H
+    @assert size(positions) == size(variances) == (2, max(robo.H, robo.H₊))
+    for h in axes(positions, 2)
         n = h * obs.ns
         @assert positions[1, h] ≈ 10 + 5h * robo.T
         @assert positions[2, h] ≈ dt * n * (n + 1) / 2
@@ -95,6 +96,31 @@ function check_recurrent_forecast(robo, obs, gps, model)
     println("PASS: causal GP inputs, recurrent-weight update and four-step RNN + GP posterior rollout")
 end
 
+function check_tail_constraints(robo, ref)
+    obs = obstacle(2.0, [50.0, 2.0], 1)
+    means = repeat(obs.posn, 1, robo.H₊)
+    variances = zeros(2, robo.H₊)
+    φ = ones(robo.H₊)
+    single(m, v) = nMPC_avoid(robo, obs, ref, m, v, φ)
+    multi(m, v) = nMPC_avoid_multi(robo, [obs], ref, [m], [v], φ; retry=false)
+
+    for solve in (single, multi)
+        @test_throws DimensionMismatch solve(means[:, 1:robo.H], variances)
+        for h in robo.H+1:robo.H₊
+            # Each change alone leaves room ahead. Together the rectangle at h
+            # covers the robot's entire reachable region at that step.
+            shifted = copy(means)
+            shifted[1, h] = 15.0
+            expanded = copy(variances)
+            expanded[:, h] .= 20.0^2
+            solve(shifted, variances)
+            solve(means, expanded)
+            @test_throws "MPC solve failed:" solve(shifted, expanded)
+        end
+    end
+    println("PASS: both MPC solvers use the matching center and width at steps 7 and 8")
+end
+
 function check_environment()
     check_obstacle_noise()
     Random.seed!(42)
@@ -108,6 +134,7 @@ function check_environment()
         check_prediction_timing(robo, network, ns)
     end
     ref = [[6i * robo.T, 2.0] for i in 1:robo.H₊]
+    check_tail_constraints(robo, ref)
     x, y, θ, v, steering, acceleration = nMPC_free(robo, ref)
     @assert all(isfinite, vcat(x, y, θ, v, steering, acceleration))
     @assert isapprox(x[1], 0.6; atol=1e-5)
@@ -131,36 +158,36 @@ function check_environment()
     # absolute substep times, starting from the measured end of the first step.
     observed_at = last(obs.time)
     @assert observed_at ≈ robo.T
-    substep_ends = observed_at .+ (1:(obs.ns * robo.H)) .* (robo.T / obs.ns)
+    substep_ends = observed_at .+ (1:(obs.ns * robo.H₊)) .* (robo.T / obs.ns)
     for axis in eachindex(gps)
         @assert vec(gps[axis].x) == obs.time
         increments, _ = predict_f(gps[axis], substep_ends)
         _, noisy_variances = predict_y(gps[axis], substep_ends)
-        for h in 1:robo.H
+        for h in 1:robo.H₊
             @assert horizon_positions[axis, h] ≈ obs.posn[axis] + sum(increments[1:h*obs.ns])
             @assert horizon_variances[axis, h] ≈ sum(noisy_variances[1:h*obs.ns])
         end
     end
-    times = collect(0.2:0.1:0.7)
+    times = observed_at .+ (1:robo.H₊) .* robo.T
     means, variances = predict_f(gps[1], times)
     check_recurrent_forecast(robo, deepcopy(obs), gps, network)
 
-    pmean = repeat(obs.posn, 1, robo.H) + [means'; means']
+    pmean = repeat(obs.posn, 1, robo.H₊) + [means'; means']
     pvar = [variances'; variances']
     for coverage in (0.80, 0.95, 0.99)
         q = rectangle_quantile(coverage)
         axis_probability = cdf(Normal(), q) - cdf(Normal(), -q)
         @assert isapprox(axis_probability^2, coverage; atol=1e-12, rtol=0)
     end
-    φ = fill(rectangle_quantile(0.95), robo.H)
+    φ = fill(rectangle_quantile(0.95), robo.H₊)
     solution = nMPC_avoid(robo, obs, ref, pmean, pvar, φ)
     @assert all(values -> all(isfinite, values), solution)
     println("PASS: obstacle-avoidance optimization")
 
     multi_robot = deepcopy(robo)
     multi_obstacles = [obstacle(2.0, [20.0, 6.0], 3), obstacle(2.0, [20.0, -6.0], 3)]
-    multi_means = [repeat(obs.posn, 1, robo.H) for obs in multi_obstacles]
-    multi_variances = [fill(1e-3, 2, robo.H) for _ in multi_obstacles]
+    multi_means = [repeat(obs.posn, 1, robo.H₊) for obs in multi_obstacles]
+    multi_variances = [fill(1e-3, 2, robo.H₊) for _ in multi_obstacles]
     multi_diagnostics = Any[]
     multi_solution = nMPC_avoid_multi(multi_robot, multi_obstacles, turning_ref, multi_means, multi_variances, φ;
                                     diagnostics=multi_diagnostics)

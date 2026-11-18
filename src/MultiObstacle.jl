@@ -8,7 +8,7 @@ function predict_obstacle!(robo::robot, obs::obstacle, obsGP::Vector{GPBase}, mN
     decision_time = elapsed_steps * robo.T
     isapprox(last(obs.tseri), decision_time) || throw(ArgumentError("Obstacle position and decision time must agree"))
     Detection!(robo, obs, obsGP, mNN)
-    ns, H, T = obs.ns, robo.H, robo.T
+    ns, H, T = obs.ns, forecast_horizon(robo), robo.T
     times = [decision_time + j * (T / ns) for j in 1:(ns * H)]
 
     δme, δva = predict_displacements(mNN, obsGP, times, T / ns)
@@ -33,7 +33,6 @@ function nMPC_avoid_multi(robo::robot, obs_list::Vector{obstacle}, ref::Vector{V
     opti = JuMP.Model(Ipopt.Optimizer)
     set_silent(opti)
 
-    H     = robo.H
     H₊    = robo.H₊
     τ     = robo.T
     A     = robo.A
@@ -47,8 +46,7 @@ function nMPC_avoid_multi(robo::robot, obs_list::Vector{obstacle}, ref::Vector{V
     dimO = 4
     nobs = length(obs_list)
 
-    d = [[φ[i] * [sqrt(Pvars[j][1, i]), sqrt(Pvars[j][1, i]), sqrt(Pvars[j][2, i]), sqrt(Pvars[j][2, i])]
-          for i in 1:H] for j in 1:nobs]
+    d = [obstacle_rectangle_widths(Pmeans[j], Pvars[j], φ, H₊) for j in 1:nobs]
 
     x₀ = robo.predPose[1, :]
     y₀ = robo.predPose[2, :]
@@ -84,8 +82,7 @@ function nMPC_avoid_multi(robo::robot, obs_list::Vector{obstacle}, ref::Vector{V
         set_start_value(a[i], initial_controls === nothing ? robo.input[2] : initial_controls[2])
         rotation = [cos(θ₀[i]) -sin(θ₀[i]); sin(θ₀[i]) cos(θ₀[i])]
         for j in 1:nobs
-            column = i <= H ? i : 1
-            delta = [x₀[i], y₀[i]] - Pmeans[j][:, column]
+            delta = [x₀[i], y₀[i]] - Pmeans[j][:, i]
             normal = norm(delta) > 1e-8 ? delta / norm(delta) : [1.0, 0.0]
             robot_normal = -rotation' * normal
             obstacle_dual = [max(normal[1], 0), max(-normal[1], 0), max(normal[2], 0), max(-normal[2], 0)]
@@ -130,15 +127,9 @@ function nMPC_avoid_multi(robo::robot, obs_list::Vector{obstacle}, ref::Vector{V
 
     for j in 1:nobs
         r = obs_list[j].r
-        for i in 1:H
+        for i in 1:H₊
             @constraint(opti, dot(E' * μ[:, i, j], E' * μ[:, i, j]) <= 1.)
             @constraint(opti, μ[:, i, j]' * (E * ([x[i], y[i]] - Pmeans[j][:, i]) - d[j][i]) - λ[:, i, j]' * b >= r + safe[i, j])
-            @constraint(opti, λ[:, i, j]' * A + μ[:, i, j]' * E * [cos(θ[i]) -sin(θ[i]); sin(θ[i]) cos(θ[i])] .== 0)
-        end
-
-        for i in H + 1:H₊
-            @constraint(opti, dot(E' * μ[:, i, j], E' * μ[:, i, j]) <= 1.)
-            @constraint(opti, μ[:, i, j]' * (E * ([x[i], y[i]] - Pmeans[j][:, 1]) - d[j][1]) - λ[:, i, j]' * b >= r + safe[i, j])
             @constraint(opti, λ[:, i, j]' * A + μ[:, i, j]' * E * [cos(θ[i]) -sin(θ[i]); sin(θ[i]) cos(θ[i])] .== 0)
         end
     end

@@ -24,7 +24,7 @@ function simulate_figure(config)
     obs = obstacle(2.0, copy(config.obstacle_initial), ns)
     gps = GPBase[GPE(mean=MeanConst(1.0), kernel=SEArd([1.0], 1.0), logNoise=-2.0) for _ in 1:2]
     network = DisplacementRNN()
-    φ = fill(rectangle_quantile(0.95), H)
+    φ = fill(rectangle_quantile(0.95), forecast_horizon(robo))
     snapshots = Dict{Int, Any}()
     rows = Any[]
     diagnostics = Any[]
@@ -109,7 +109,7 @@ function render_figure(result, config)
         println(io, "Final post-update robot position: ($(round(final_row[3]; digits=6)), $(round(final_row[4]; digits=6))) m. Distance from the y=2 reference line: $(round(abs(final_row[4]-2); digits=6)) m. Panels show the state before the robot update at each labeled step.\n")
         println(io, "## Scope and differences from the paper\n")
         println(io, "- This is a fresh simulation of the $(config.scenario_name)-obstacle scenario, not an extraction of the published image or a claim of numerical identity.")
-        println(io, "- Uses the paper's H=8 and robot half-length=2.5 m. The original single-obstacle entry point uses H=6 and half-length=2.3 m.")
+        println(io, "- Uses an 8-step planning horizon and robot half-length of 2.5 m. The original single-obstacle entry point also plans with 8 obstacle predictions, evaluates prediction error over 6 steps, and uses a half-length of 2.3 m.")
         println(io, "- Retains repository speed bounds [-10, 20] m/s and initial speed 6 m/s. The paper text lists [-1, 2] m/s, which conflicts with its 6t reference and the repository initial speed.")
         println(io, "- MPC yaw updates include speed, matching robot_ode! and paper equation (20). The velocity warm start uses row 4 rather than the yaw row. The simulator integrates its ODE; the MPC uses Euler constraints.")
         if hasproperty(result, :velocity_noise_std)

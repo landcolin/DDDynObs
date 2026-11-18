@@ -47,7 +47,7 @@ function plot_obs(obs::obstacle, Pmean::Matrix{Float64}, Pvar::Matrix{Float64}, 
     plot!(Shape(pts), fillcolor = plot_color(:blue, 0.5), label="")
 
 
-    for i in 1:H
+    for i in axes(Pmean, 2)
         δ₁  = φ[i]*sqrt(Pvar[1,i]) 
         δ₂  = φ[i]*sqrt(Pvar[2,i])
         rec = Shape([Pmean[1,i] + δ₁, Pmean[1,i] + δ₁, Pmean[1,i] - δ₁, Pmean[1,i] - δ₁],

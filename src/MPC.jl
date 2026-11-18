@@ -8,12 +8,19 @@ function check_mpc_solution!(opti; diagnostics=nothing)
     solved || error("MPC solve failed: $(termination_status(opti)), $(primal_status(opti))")
 end
 
+function obstacle_rectangle_widths(Pmean, Pvar, φ, horizon)
+    if size(Pmean, 1) != 2 || size(Pvar, 1) != 2 ||
+       min(size(Pmean, 2), size(Pvar, 2), length(φ)) < horizon
+        throw(DimensionMismatch("MPC needs a 2D obstacle mean, variance and rectangle quantile for each of its $horizon steps"))
+    end
+    return [φ[i] .* sqrt.(Pvar[[1, 1, 2, 2], i]) for i in 1:horizon]
+end
+
 function nMPC_avoid(robo::robot, obs::obstacle, ref::Vector{Vector{Float64}}, Pmean::Matrix{Float64}, Pvar::Matrix{Float64}, φ::Vector{Float64}; diagnostics=nothing)
     
     opti  = JuMP.Model(Ipopt.Optimizer)
     set_silent(opti)
 
-    H     = robo.H
     H₊    = robo.H₊
     τ     = robo.T
     A     = robo.A
@@ -23,7 +30,7 @@ function nMPC_avoid(robo::robot, obs::obstacle, ref::Vector{Vector{Float64}}, Pm
     r     = obs.r
     # safe  = 2.
 
-    d = [φ[i]*[sqrt(Pvar[1,i]), sqrt(Pvar[1,i]), sqrt(Pvar[2,i]), sqrt(Pvar[2,i])] for i in 1:H]
+    d = obstacle_rectangle_widths(Pmean, Pvar, φ, H₊)
 
     bds   = robo.pBnd
     state = robo.pose
@@ -74,19 +81,11 @@ function nMPC_avoid(robo::robot, obs::obstacle, ref::Vector{Vector{Float64}}, Pm
         end
     end
 
-    for i in 1:H
+    for i in 1:H₊
         @constraint(opti, dot(E'*μ[:,i], E'*μ[:,i]) <= 1.)
         @constraint(opti, μ[:,i]'*(E*([x[i], y[i]] - Pmean[:,i]) - d[i])- λ[:,i]'*b >= r+safe[i])
         @constraint(opti, λ[:,i]'*A + μ[:,i]'*E*[cos(θ[i]) -sin(θ[i]); sin(θ[i]) cos(θ[i])] .== 0)
     end
-
-    for i in H+1:H₊
-        @constraint(opti, dot(E'*μ[:,i], E'*μ[:,i]) <= 1.)
-        @constraint(opti, μ[:,i]'*(E*([x[i], y[i]] - Pmean[:,1]) - d[1])- λ[:,i]'*b >= r+safe[i])
-        @constraint(opti, λ[:,i]'*A + μ[:,i]'*E*[cos(θ[i]) -sin(θ[i]); sin(θ[i]) cos(θ[i])] .== 0)
-    end
-
-
 
     JuMP.optimize!(opti)
     check_mpc_solution!(opti; diagnostics)

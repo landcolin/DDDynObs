@@ -64,11 +64,9 @@ for k in 1:L
     if norm(robo.pose[1:2] - obs.posn) < robo.R
         Pmean, Pvar = predict_obstacle!(robo, obs, obsGP, mNN, k - 1)
 
-        pre_traj[:,:,k] = Pmean
+        pre_traj[:,:,k] = Pmean[:, 1:H]
 
-        # Prob = [0.95*0.9^(i-1)  for i in 1:H]
-        Prob = [0.95  for i in 1:H]
-        φ    = rectangle_quantile.(Prob)
+        φ = fill(rectangle_quantile(0.95), forecast_horizon(robo))
 
         x, y, θ, v, tα, a = nMPC_avoid(robo, obs, Ref, Pmean, Pvar, φ)
         robo.predPose = [x';y';θ';v']
