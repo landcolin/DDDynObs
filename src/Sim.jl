@@ -27,7 +27,7 @@ TypeOfObs = 1
 
 test_points = [10, 20, 30, 40, 50]
 obs_traj = zeros(2,L)
-pre_traj = zeros(2,H,L)
+pre_traj = fill(NaN, 2, H, L)
 mse_pre  = zeros(length(test_points))
 
 
@@ -58,29 +58,10 @@ println("Now start the simulation")
 for k in 1:L
     println("Time instance $k")
 
-    run_obs!(obs, k-1, T, TypeOfObs)
-
-    obs_traj[:,k] = obs.posn
-
     Ref  = [[6(k+i-1)*T, 2.] for i in 1:H₊]
 
     if norm(robo.pose[1:2] - obs.posn) < robo.R
-        Detection!(robo, obs, obsGP, mNN)
-        δme = zeros(dim, ns*H)
-        δva = zeros(dim, ns*H)
-        for i in 1:dim
-            δme[i,:], δva[i,:] = predictGP(mNN, obsGP[i], k*T .+ T*[x/ns for x in 1:H*ns], i)
-        end
-
-        # Uncertainty Propagation
-        δme[:,1] += obs.posn
-        for i in 1:H*ns-1
-            δme[:,i+1] += δme[:,i]
-            δva[:,i+1] += δva[:,i] + [exp(2obsGP[1].logNoise.value), exp(2obsGP[2].logNoise.value)]
-        end
-
-        Pmean = δme[:,[i*ns for i in 1:H]]
-        Pvar  = δva[:,[i*ns for i in 1:H]]
+        Pmean, Pvar = predict_obstacle!(robo, obs, obsGP, mNN, k - 1)
 
         pre_traj[:,:,k] = Pmean
 
@@ -94,7 +75,6 @@ for k in 1:L
         plot_obs(obs, Pmean, Pvar, φ)
         display(fig)
         savefig(fig, joinpath(path_to_fig, "$k.pdf"))
-        run!(robo, [tα[1], a[1]])
     else
         x, y, θ, v, tα, a = nMPC_free(robo, Ref)
         robo.predPose = [x';y';θ';v']
@@ -102,13 +82,15 @@ for k in 1:L
         plot_obs(obs)
         display(fig)
         savefig(fig, joinpath(path_to_fig, "$k.pdf"))
-        run!(robo, [tα[1], a[1]])
     end
+    run!(robo, [tα[1], a[1]])
+    run_obs!(obs, k - 1, T, TypeOfObs)
+    obs_traj[:, k] = obs.posn
 end
 
 
 for (i, v) in enumerate(test_points)
     print(v)
-    mse = sqrt(1/H*sum(norm(obs_traj[:,v+h] - pre_traj[:,h,v])^2 for h in 1:H))
+    mse = sqrt(1/H*sum(norm(obs_traj[:,v+h-1] - pre_traj[:,h,v])^2 for h in 1:H))
     mse_pre[i] = mse
 end

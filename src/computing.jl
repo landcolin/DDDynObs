@@ -2,6 +2,7 @@
 rectangle_quantile(joint_coverage) = quantile(Normal(), (1 + sqrt(joint_coverage)) / 2)
 
 function Detection!(robo::robot, obs::obstacle, obsGP::Vector{GPBase}, mNN::Chain; minData = 9, maxData = 60)
+    isempty(obs.time) && return
     robo_loca = robo.pose[1:2]
     obs_loca  = obs.posn
     R         = robo.R
@@ -110,6 +111,10 @@ end
 
 
 function predictGP(mNN::Chain, mGP::GPBase, dataIn::Vector{Float64}, id::Int64; minData = 9)
+    if isempty(mGP.y)
+        inputs = reshape(dataIn, 1, :)
+        return GaussianProcesses.mean(mGP.mean, inputs), diag(cov(mGP.kernel, inputs, inputs))
+    end
     H = length(dataIn)
     postMean = ones(H)
     postVar  = zeros(H)

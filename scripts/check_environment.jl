@@ -3,6 +3,23 @@ flush(stdout)
 include(joinpath(@__DIR__, "..", "src", "environment.jl"))
 H = 6  # Plotting functions use the same horizon as the simulation entry points.
 
+function check_prediction_timing(robo, network)
+    obs = obstacle(2.0, [10.0, 0.0], 3)
+    dt = robo.T / obs.ns
+    # x has constant speed 5 m/s; y increments equal their end timestamps.
+    gps = GPBase[GPE(mean=m, kernel=SEArd([1.0], 1.0), logNoise=-2.0)
+                 for m in (MeanConst(5dt), MeanLin([1.0]))]
+    positions, variances = predict_obstacle!(robo, obs, gps, network, 0)
+    @assert all(gp -> isempty(gp.y), gps)
+    @assert all(isfinite, variances) && all(>=(0), variances)
+    for h in 1:robo.H
+        n = h * obs.ns
+        @assert positions[1, h] ≈ 10 + 5h * robo.T
+        @assert positions[2, h] ≈ dt * n * (n + 1) / 2
+    end
+    println("PASS: first decision uses no future observations; all prediction columns end at the robot horizon times")
+end
+
 function check_environment()
     Random.seed!(42)
     LinearAlgebra.BLAS.set_num_threads(1)
@@ -10,6 +27,8 @@ function check_environment()
     bounds = polyBound(0.6, -10.0, 20.0, -2.0, 2.0)
     shape = [1.0 0.0; -1.0 0.0; 0.0 1.0; 0.0 -1.0]
     robo = robot(0.1, 6, 8, 20.0, 1.9, bounds, [0.0, 2.0, 0.0, 6.0], shape, [2.3, 2.3, 1.0, 1.0])
+    network = Chain(RNN(1 => 16, tanh), Dense(16 => 2, tanh))
+    check_prediction_timing(robo, network)
     ref = [[6i * robo.T, 2.0] for i in 1:robo.H₊]
     x, y, θ, v, steering, acceleration = nMPC_free(robo, ref)
     @assert all(isfinite, vcat(x, y, θ, v, steering, acceleration))
@@ -28,9 +47,20 @@ function check_environment()
 
     obs = obstacle(2.0, [10.0, 0.0], 3)
     gps = GPBase[GPE(mean=MeanConst(1.0), kernel=SEArd([1.0], 1.0), logNoise=-2.0) for _ in 1:2]
-    network = Chain(RNN(1 => 16, tanh), Dense(16 => 2, tanh))
     run_obs!(obs, 0, robo.T, 1)
-    Detection!(robo, obs, gps, network)
+    horizon_positions, _ = predict_obstacle!(robo, obs, gps, network, 1)
+    # At the second decision, check the forecast against the fitted GP at
+    # absolute substep times, starting from the measured end of the first step.
+    observed_at = last(obs.time)
+    @assert observed_at ≈ robo.T
+    substep_ends = observed_at .+ (1:(obs.ns * robo.H)) .* (robo.T / obs.ns)
+    for axis in eachindex(gps)
+        @assert vec(gps[axis].x) == obs.time
+        increments, _ = predict_f(gps[axis], substep_ends)
+        for h in 1:robo.H
+            @assert horizon_positions[axis, h] ≈ obs.posn[axis] + sum(increments[1:h*obs.ns])
+        end
+    end
     times = collect(0.2:0.1:0.7)
     means, variances = predictGP(network, gps[1], times, 1)
     @assert all(isfinite, means) && all(isfinite, variances)

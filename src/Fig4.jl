@@ -36,13 +36,11 @@ function simulate_fig4(config)
         println(csv, "step,time,x,y,yaw,speed,obstacle_x,obstacle_y,steering_tangent,acceleration,gp_active,clearance_before,clearance_after,solver_status,solver_feasible,obstacle2_x,obstacle2_y,obstacle1_clearance_before,obstacle1_clearance_after,obstacle2_clearance_before,obstacle2_clearance_after,active_obstacles,solver_attempts")
         for k in 1:maximum(config.steps)
             started = time()
-            run_obs!(obstacles[1], k - 1, T, 2)
-            run_obs_topdown!(obstacles[2], k - 1, T)
             ref = [[6(k + i - 1) * T, 2.0] for i in 1:H₊]
             active = [i for i in eachindex(obstacles) if norm(robo.pose[1:2] - obstacles[i].posn) < robo.R]
             means, variances = Any[nothing for _ in obstacles], Any[nothing for _ in obstacles]
             for i in active
-                means[i], variances[i] = predict_obstacle!(robo, obstacles[i], gps[i], networks[i], k)
+                means[i], variances[i] = predict_obstacle!(robo, obstacles[i], gps[i], networks[i], k - 1)
                 @assert all(isfinite, means[i]) && all(isfinite, variances[i]) && minimum(variances[i]) >= 0
             end
             serialize(joinpath(output, "last_problem.jls"), (robot=robo, obstacles=obstacles[active], ref=ref,
@@ -62,6 +60,8 @@ function simulate_fig4(config)
                                 means=deepcopy(means), variances=deepcopy(variances), quantiles=φ)
             end
             run!(robo, [steering[1], acceleration[1]])
+            run_obs!(obstacles[1], k - 1, T, 2)
+            run_obs_topdown!(obstacles[2], k - 1, T)
             after = [rectangle_circle_clearance(robo, obs) for obs in obstacles]
             row = (k, k * T, robo.pose..., obstacles[1].posn..., steering[1], acceleration[1],
                    !isempty(active), minimum(before), minimum(after), diagnostics[end].status, diagnostics[end].feasible,

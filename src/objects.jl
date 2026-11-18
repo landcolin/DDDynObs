@@ -68,7 +68,7 @@ mutable struct obstacle
 
         obj        = new(r, posn, ns)
         obj.δpos   = zeros(length(posn), ns)
-        obj.time   = zeros(ns)
+        obj.time   = Float64[]  # No measured displacements at the initial position.
 
         obj.traj  = [posn;;]
         obj.tseri = [0.]

@@ -32,24 +32,11 @@ function simulate_figure(config)
         println(csv, "step,time,x,y,yaw,speed,obstacle_x,obstacle_y,steering_tangent,acceleration,gp_active,clearance_before,clearance_after,solver_status,solver_feasible")
         for k in 1:maximum(config.steps)
             started = time()
-            run_obs!(obs, k - 1, T, config.scenario)
             ref = [[6(k + i - 1) * T, 2.0] for i in 1:H₊]
             active = norm(robo.pose[1:2] - obs.posn) < robo.R
             pmean, pvar = nothing, nothing
             if active
-                Detection!(robo, obs, gps, network)
-                δmean, δvar = zeros(2, ns * H), zeros(2, ns * H)
-                times = k * T .+ T .* collect(1:(H * ns)) ./ ns
-                for axis in 1:2
-                    δmean[axis, :], δvar[axis, :] = predictGP(network, gps[axis], times, axis)
-                end
-                δmean[:, 1] += obs.posn
-                for i in 1:(H * ns - 1)
-                    δmean[:, i + 1] += δmean[:, i]
-                    δvar[:, i + 1] += δvar[:, i] + [exp(2gp.logNoise.value) for gp in gps]
-                end
-                pmean = δmean[:, ns:ns:end]
-                pvar = δvar[:, ns:ns:end]
+                pmean, pvar = predict_obstacle!(robo, obs, gps, network, k - 1)
                 @assert all(isfinite, pmean) && all(isfinite, pvar) && minimum(pvar) >= 0
                 solution = nMPC_avoid(robo, obs, ref, pmean, pvar, φ; diagnostics)
             else
@@ -64,6 +51,7 @@ function simulate_figure(config)
                                 mean=pmean, variance=pvar, quantiles=φ)
             end
             run!(robo, [steering[1], acceleration[1]])
+            run_obs!(obs, k - 1, T, config.scenario)
             clearance_after = rectangle_circle_clearance(robo, obs)
             row = (k, k * T, robo.pose..., obs.posn..., steering[1], acceleration[1],
                    active, clearance_before, clearance_after, diagnostics[end].status, diagnostics[end].feasible)

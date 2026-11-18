@@ -16,14 +16,17 @@ function run_obs_topdown!(obs::obstacle, k::Int64, τ::Float64)
 end
 
 
-function predict_obstacle!(robo::robot, obs::obstacle, obsGP::Vector{GPBase}, mNN::Chain, k::Int64)
+function predict_obstacle!(robo::robot, obs::obstacle, obsGP::Vector{GPBase}, mNN::Chain, elapsed_steps::Int64)
+    decision_time = elapsed_steps * robo.T
+    isapprox(last(obs.tseri), decision_time) || throw(ArgumentError("Obstacle position and decision time must agree"))
     Detection!(robo, obs, obsGP, mNN)
     dim, ns, H, T = length(obs.posn), obs.ns, robo.H, robo.T
+    times = [decision_time + j * (T / ns) for j in 1:(ns * H)]
 
     δme = zeros(dim, ns * H)
     δva = zeros(dim, ns * H)
     for i in 1:dim
-        δme[i, :], δva[i, :] = predictGP(mNN, obsGP[i], k * T .+ T * [x / ns for x in 1:H * ns], i)
+        δme[i, :], δva[i, :] = predictGP(mNN, obsGP[i], times, i)
     end
 
     δme[:, 1] += obs.posn

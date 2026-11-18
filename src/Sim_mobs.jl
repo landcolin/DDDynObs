@@ -102,9 +102,6 @@ println("Now start the simulation")
 for k in 1:L
     println("Time instance $k")
 
-    run_obs!(obs_circle, k - 1, T, 2)
-    run_obs_topdown!(obs_straight, k - 1, T)
-
     Ref = [[6(k + i - 1) * T, 2.] for i in 1:H₊]
     Prob = [0.95 for _ in 1:H]
     φ = rectangle_quantile.(Prob)
@@ -117,7 +114,7 @@ for k in 1:L
         active_obs = obstacle[]
 
         for i in active_ids
-            Pmean, Pvar = predict_obstacle!(robo, obs_list[i], obsGPs[i], mNNs[i], k)
+            Pmean, Pvar = predict_obstacle!(robo, obs_list[i], obsGPs[i], mNNs[i], k - 1)
             push!(Pmeans, Pmean)
             push!(Pvars, Pvar)
             push!(active_obs, obs_list[i])
@@ -137,7 +134,6 @@ for k in 1:L
         end
         display(fig)
         savefig(fig, joinpath(path_to_fig, "$k.pdf"))
-        run!(robo, [tα[1], a[1]])
     else
         x, y, θ, v, tα, a = nMPC_free(robo, Ref)
         robo.predPose = [x'; y'; θ'; v']
@@ -148,6 +144,8 @@ for k in 1:L
         end
         display(fig)
         savefig(fig, joinpath(path_to_fig, "$k.pdf"))
-        run!(robo, [tα[1], a[1]])
     end
+    run!(robo, [tα[1], a[1]])
+    run_obs!(obs_circle, k - 1, T, 2)
+    run_obs_topdown!(obs_straight, k - 1, T)
 end
