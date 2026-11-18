@@ -50,7 +50,8 @@ robo  = robot(T, H, H₊, R, ℓ, pBounds, init, A, b)
 obsGP    = Vector{GPBase}(undef, 2) #MeanPoly(ones(1,10))
 obsGP[1] = GPE(mean = MeanConst(1.), kernel = SEArd([1.], 1.), logNoise = -2.)
 obsGP[2] = GPE(mean = MeanConst(1.), kernel = SEArd([1.], 1.), logNoise = -2.)
-mNN      = Chain(RNN(1 => 16, tanh), Dense(16 => 2, tanh))
+mNN      = DisplacementRNN()
+motion_rng = MersenneTwister(1234)
 
 
 # Run simulation
@@ -84,7 +85,7 @@ for k in 1:L
         savefig(fig, joinpath(path_to_fig, "$k.pdf"))
     end
     run!(robo, [tα[1], a[1]])
-    run_obs!(obs, k - 1, T, TypeOfObs)
+    run_obs!(obs, k - 1, T, TypeOfObs; rng=motion_rng)
     obs_traj[:, k] = obs.posn
 end
 

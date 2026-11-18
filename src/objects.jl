@@ -90,30 +90,22 @@ function run!(robo::robot, in::Vector{Float64})
 end
 
 
-function run_obs!(obs::obstacle, k::Int64, τ::Float64, scenario::Int64)
-    ns  = obs.ns
-    Δτ  = τ/ns
-    
-
-    rng       = Random.MersenneTwister(1234)
-    obs.time  = [k*τ + i*Δτ for i in 1:ns]
+function advance_obstacle!(velocity, obs::obstacle, k::Int64, τ::Float64, rng)
+    Δτ = τ / obs.ns
+    obs.time = [k * τ + i * Δτ for i in 1:obs.ns]
     obs.tseri = [obs.tseri; obs.time]
-
-    if scenario == 1 #Sinusoid move
-        for i in 1:ns
-            obs.δpos[:,i] = Δτ*[-5., 5sin(π*(k*τ+i*Δτ))] + Δτ*randn(rng, Float64, (2))/ns
-            obs.traj      = [obs.traj   obs.posn+sum(obs.δpos[:,k] for k in 1:i)]
-        end
-    elseif  scenario == 2 #Circle move
-        for i in 1:ns
-            obs.δpos[:,i] = Δτ*[5cos(π/4*(k*τ+i*Δτ)), 5sin(π/4*(k*τ+i*Δτ))] + Δτ*randn(rng, Float64, (2))/ns
-            obs.traj      = [obs.traj   obs.posn+sum(obs.δpos[:,k] for k in 1:i)]
-        end
-    else #Straight move
-        for i in 1:ns
-            obs.δpos[:,i] = Δτ*[0., 6.] + Δτ*randn(rng, Float64, (2))/ns
-            obs.traj      = [obs.traj   obs.posn+sum(obs.δpos[:,k] for k in 1:i)]
-        end
+    for (i, t) in enumerate(obs.time)
+        # Independent velocity perturbations in m/s; integrate over this substep.
+        obs.δpos[:, i] = Δτ * (velocity(t) + randn(rng, 2))
     end
-    obs.posn = obs.traj[:,end]
+    obs.traj = hcat(obs.traj, obs.posn .+ cumsum(obs.δpos; dims=2))
+    obs.posn = obs.traj[:, end]
+end
+
+function run_obs!(obs::obstacle, k::Int64, τ::Float64, scenario::Int64; rng=Random.default_rng())
+    advance_obstacle!(obs, k, τ, rng) do t
+        scenario == 1 && return [-5., 5sin(π*t)]
+        scenario == 2 && return [5cos(π/4*t), 5sin(π/4*t)]
+        return [0., 6.]
+    end
 end

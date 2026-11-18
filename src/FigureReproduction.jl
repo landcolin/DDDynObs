@@ -15,6 +15,7 @@ end
 function simulate_figure(config)
     output = figure_output(config)
     Random.seed!(1234)
+    motion_rng = MersenneTwister(1234)
     BLAS.set_num_threads(1)
     T, H₊, ns = 0.1, 8, 3
     bounds = polyBound(0.6, -10.0, 20.0, -2.0, 2.0)
@@ -22,7 +23,7 @@ function simulate_figure(config)
     robo = robot(T, H, H₊, 20.0, 1.9, bounds, [0.0, 2.0, 0.0, 6.0], A, [2.5, 2.5, 1.0, 1.0])
     obs = obstacle(2.0, copy(config.obstacle_initial), ns)
     gps = GPBase[GPE(mean=MeanConst(1.0), kernel=SEArd([1.0], 1.0), logNoise=-2.0) for _ in 1:2]
-    network = Chain(RNN(1 => 16, tanh), Dense(16 => 2, tanh))
+    network = DisplacementRNN()
     φ = fill(rectangle_quantile(0.95), H)
     snapshots = Dict{Int, Any}()
     rows = Any[]
@@ -51,7 +52,7 @@ function simulate_figure(config)
                                 mean=pmean, variance=pvar, quantiles=φ)
             end
             run!(robo, [steering[1], acceleration[1]])
-            run_obs!(obs, k - 1, T, config.scenario)
+            run_obs!(obs, k - 1, T, config.scenario; rng=motion_rng)
             clearance_after = rectangle_circle_clearance(robo, obs)
             row = (k, k * T, robo.pose..., obs.posn..., steering[1], acceleration[1],
                    active, clearance_before, clearance_after, diagnostics[end].status, diagnostics[end].feasible)
@@ -59,12 +60,12 @@ function simulate_figure(config)
             println(csv, join(row, ','))
             flush(csv)
             # Checkpoint also permits plotting without re-running neural network training.
-            serialize(joinpath(output, "run_state.jls"), (snapshots=snapshots, rows=rows, diagnostics=diagnostics))
+            serialize(joinpath(output, "run_state.jls"), (snapshots=snapshots, rows=rows, diagnostics=diagnostics, velocity_noise_std=1.0))
             println("Step $k/$(maximum(config.steps)) | GP=$active | solver=$(diagnostics[end].status) | clearance=$(round(clearance_after; digits=3)) m | $(round(time()-started; digits=2)) s")
             flush(stdout)
         end
     end
-    return (snapshots=snapshots, rows=rows, diagnostics=diagnostics)
+    return (snapshots=snapshots, rows=rows, diagnostics=diagnostics, velocity_noise_std=1.0)
 end
 
 function render_figure(result, config)
@@ -111,8 +112,11 @@ function render_figure(result, config)
         println(io, "- Uses the paper's H=8 and robot half-length=2.5 m. The original single-obstacle entry point uses H=6 and half-length=2.3 m.")
         println(io, "- Retains repository speed bounds [-10, 20] m/s and initial speed 6 m/s. The paper text lists [-1, 2] m/s, which conflicts with its 6t reference and the repository initial speed.")
         println(io, "- MPC yaw updates include speed, matching robot_ode! and paper equation (20). The velocity warm start uses row 4 rather than the yaw row. The simulator integrates its ODE; the MPC uses Euler constraints.")
-        println(io, "- Retains run_obs!'s noise implementation: it recreates seed 1234 each step and scales noise by the sub-sample count. The paper describes i.i.d. velocity noise with standard deviation 1.")
-        println(io, "- Uses the locked Flux 0.16 implementation and existing trainNN/predictLSTM functions; historical Flux recurrent-state behavior and the original paper's network weights are unavailable.")
+        if hasproperty(result, :velocity_noise_std)
+            println(io, "- Each obstacle substep samples fresh independent Gaussian velocity noise on both axes (standard deviation $(result.velocity_noise_std) m/s). Motion RNGs are seeded once: 1234 for the primary obstacle and 42 for the vertical obstacle when present.")
+        else
+            println(io, "- This older checkpoint used per-period reseeding and divided velocity noise by the substep count.")
+        end
         for note in config.extra_notes
             println(io, "- ", note)
         end

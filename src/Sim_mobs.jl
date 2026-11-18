@@ -95,7 +95,8 @@ for i in 1:length(obs_list)
     obsGPs[i][2] = GPE(mean = MeanConst(1.), kernel = SEArd([1.], 1.), logNoise = -2.)
 end
 
-mNNs = [Chain(RNN(1 => 16, tanh), Dense(16 => 2, tanh)) for _ in 1:length(obs_list)]
+mNNs = [DisplacementRNN() for _ in obs_list]
+circle_rng, vertical_rng = MersenneTwister(1234), MersenneTwister(42)
 
 
 println("Now start the simulation")
@@ -146,6 +147,6 @@ for k in 1:L
         savefig(fig, joinpath(path_to_fig, "$k.pdf"))
     end
     run!(robo, [tα[1], a[1]])
-    run_obs!(obs_circle, k - 1, T, 2)
-    run_obs_topdown!(obs_straight, k - 1, T)
+    run_obs!(obs_circle, k - 1, T, 2; rng=circle_rng)
+    run_obs_topdown!(obs_straight, k - 1, T; rng=vertical_rng)
 end

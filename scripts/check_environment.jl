@@ -3,6 +3,35 @@ flush(stdout)
 include(joinpath(@__DIR__, "..", "src", "environment.jl"))
 H = 6  # Plotting functions use the same horizon as the simulation entry points.
 
+function check_obstacle_noise()
+    T = 0.1
+    for ns in (1, 3), scenario in 1:4
+        obs = obstacle(2., [0., 0.], ns)
+        rng, reference = MersenneTwister(17), MersenneTwister(17)
+        for k in 0:2
+            if scenario == 4
+                run_obs_topdown!(obs, k, T; rng)
+            else
+                run_obs!(obs, k, T, scenario; rng)
+            end
+            for (i, t) in enumerate(obs.time)
+                nominal = if scenario == 1
+                    [-5., 5sin(π*t)]
+                elseif scenario == 2
+                    [5cos(π*t/4), 5sin(π*t/4)]
+                elseif scenario == 3
+                    [0., 6.]
+                else
+                    [0., -3.5]
+                end
+                velocity_noise = obs.δpos[:, i] / (T / ns) - nominal
+                @assert velocity_noise ≈ randn(reference, 2)
+            end
+        end
+    end
+    println("PASS: all motion models use a continuous stream of unit-normal velocity samples")
+end
+
 function check_prediction_timing(robo, network)
     obs = obstacle(2.0, [10.0, 0.0], 3)
     dt = robo.T / obs.ns
@@ -20,14 +49,59 @@ function check_prediction_timing(robo, network)
     println("PASS: first decision uses no future observations; all prediction columns end at the robot horizon times")
 end
 
+function check_recurrent_forecast(robo, obs, gps, model)
+    dt = robo.T / obs.ns
+    # The first stored input uses no measurements, the second uses only the first.
+    @assert model.posterior_inputs[:, 1] == [1, 1]
+    for axis in 1:2
+        first_gp = GPE(obs.time[1:1], obs.δpos[axis, 1:1], MeanConst(1.0), SEArd([1.0], 1.0), -2.0)
+        m, _ = predict_f(first_gp, obs.time[2:2])
+        @assert model.posterior_inputs[axis, 2] ≈ Float32(only(m))
+    end
+    run_obs!(obs, 1, robo.T, 1)
+    next_mean, _ = predict_displacements(model, gps, obs.time[1:1], dt; minData=3)
+    weights = copy(model.network[1].cell.Wh)
+    Detection!(robo, obs, gps, model; minData=3)
+    @assert model.posterior_inputs[:, 4] ≈ Float32.(vec(next_mean))
+    @assert norm(model.network[1].cell.Wh - weights) > 0
+    saved_inputs = copy(model.posterior_inputs)
+    Detection!(robo, obs, gps, model; minData=3)
+    @assert model.posterior_inputs == saved_inputs && length(gps[1].y) == 6
+
+    times = last(obs.time) .+ dt .* collect(1:4)
+    predicted, variance = predict_displacements(model, gps, times, dt; minData=3)
+    # Independent one-step rollout. Historical inputs are observed posterior predictions,
+    # then each future input is the previous output, with the hidden state carried across.
+    cell, output = model.network[1].cell, model.network[2]
+    state = Flux.initialstates(cell)
+    n = size(model.posterior_inputs, 2)
+    generated = zeros(2, n + length(times) - 1)
+    for j in axes(generated, 2)
+        x = j <= n ? model.posterior_inputs[:, j] : Float32.(generated[:, j-1])
+        hidden, state = cell(x, state)
+        generated[:, j] = output(hidden)
+    end
+    for (axis, gp) in enumerate(gps)
+        prior = GaussianProcesses.mean(gp.mean, gp.x)
+        prior[4:end] = generated[axis, 3:n-1]
+        K = cov(gp.kernel, gp.x, gp.x) + exp(2gp.logNoise.value) * I
+        cross = cov(gp.kernel, gp.x, reshape(times, 1, :))
+        expected = generated[axis, n:end] + cross' * (K \ (gp.y - prior))
+        @assert isapprox(predicted[axis, :], expected; atol=1e-6)
+        @assert variance[axis, :] ≈ last(predict_f(gp, times))
+    end
+    println("PASS: causal GP inputs, recurrent-weight update and four-step RNN + GP posterior rollout")
+end
+
 function check_environment()
+    check_obstacle_noise()
     Random.seed!(42)
     LinearAlgebra.BLAS.set_num_threads(1)
 
     bounds = polyBound(0.6, -10.0, 20.0, -2.0, 2.0)
     shape = [1.0 0.0; -1.0 0.0; 0.0 1.0; 0.0 -1.0]
     robo = robot(0.1, 6, 8, 20.0, 1.9, bounds, [0.0, 2.0, 0.0, 6.0], shape, [2.3, 2.3, 1.0, 1.0])
-    network = Chain(RNN(1 => 16, tanh), Dense(16 => 2, tanh))
+    network = DisplacementRNN()
     check_prediction_timing(robo, network)
     ref = [[6i * robo.T, 2.0] for i in 1:robo.H₊]
     x, y, θ, v, steering, acceleration = nMPC_free(robo, ref)
@@ -62,18 +136,8 @@ function check_environment()
         end
     end
     times = collect(0.2:0.1:0.7)
-    means, variances = predictGP(network, gps[1], times, 1)
-    @assert all(isfinite, means) && all(isfinite, variances)
-    @assert minimum(variances) >= -1e-10
-    initial_weights = copy(network[2].weight)
-    trainNN(network, obs.time, obs.δpos; epochs=2)
-    @assert norm(network[2].weight - initial_weights) > 0
-    predictions = predictLSTM(network, times)
-    @assert size(predictions) == (2, length(times)) && all(isfinite, predictions)
-    # Exercise the trained-neural-mean prediction branch as well.
-    means, variances = predictGP(network, gps[1], times, 1; minData=3)
-    @assert all(isfinite, means) && all(isfinite, variances)
-    println("PASS: GaussianProcesses prediction and Flux gradient/update")
+    means, variances = predict_f(gps[1], times)
+    check_recurrent_forecast(robo, deepcopy(obs), gps, network)
 
     pmean = repeat(obs.posn, 1, robo.H) + [means'; means']
     pvar = [variances'; variances']

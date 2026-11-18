@@ -1,146 +1,138 @@
 # Proposition 5.1: independent x and y intervals must each cover sqrt(joint_coverage).
 rectangle_quantile(joint_coverage) = quantile(Normal(), (1 + sqrt(joint_coverage)) / 2)
 
-function Detection!(robo::robot, obs::obstacle, obsGP::Vector{GPBase}, mNN::Chain; minData = 9, maxData = 60)
-    isempty(obs.time) && return
-    robo_loca = robo.pose[1:2]
-    obs_loca  = obs.posn
-    R         = robo.R
-
-    if norm(robo_loca - obs_loca) < R
-        for i in 1:length(obsGP)
-            if length(obsGP[i].x) <= maxData
-                nIn = [obsGP[i].x[:]; obs.time]
-                nOb = [obsGP[i].y; obs.δpos[i,:]]
-                nGP = GPE([nIn';;], nOb, obsGP[i].mean, obsGP[i].kernel, obsGP[i].logNoise)
-                obsGP[i] = deepcopy(nGP)
-            else
-                n = length(obs.time)
-                nIn = [obsGP[i].x[n+1:end]; obs.time]
-                nOb = [obsGP[i].y[n+1:end]; obs.δpos[i,:]]
-                nGP = GPE([nIn';;], nOb, obsGP[i].mean, obsGP[i].kernel, obsGP[i].logNoise)
-                obsGP[i] = deepcopy(nGP)
-            end
-        end
-        
-        for i in 1:length(obsGP)
-            bestmodel = obsGP[i]
-            bestmll   = -Inf
-            if length(obsGP[i].x) >= minData
-                for il2 in [1.]
-                    obsGP[i].kernel.iℓ2[1]  =  il2
-                    obsGP[i].logNoise.value = -2.
-                    obsGP[i].kernel.σ2      =  1.
-                    GaussianProcesses.optimize!(obsGP[i], domean = false, kern = true, noise = true, noisebounds = [-3., -1.], 
-                                                kernbounds = [[-5.,-5.],[5.,5.]], method = Optim.NelderMead())
-                    if bestmll < obsGP[i].mll
-                        bestmll   = obsGP[i].mll
-                        bestmodel = deepcopy(obsGP[i])
-                    end
-                end
-                obsGP[i] = bestmodel
-                t = [x for x in obsGP[1].x][1,:]
-                Y = transpose([[y for y in obsGP[1].y] [y for y in obsGP[2].y]])
-                trainNN(mNN, t, Y)
-            else
-                GaussianProcesses.optimize!(obsGP[i], domean = true, kern = true, noise = true, 
-                                            noisebounds = [-3., -1.], kernbounds = [[-5.,-5.],[5.,5.]])
-            end
-        end
-    end
+# Each column is a two-axis displacement forecast made before that observation arrived.
+mutable struct DisplacementRNN
+    network::Chain
+    posterior_inputs::Matrix{Float32}
 end
 
+DisplacementRNN() = DisplacementRNN(Chain(RNN(2 => 16, tanh), Dense(16 => 2, tanh)), zeros(Float32, 2, 0))
 
-function trainNN(mNN::Chain, dataIn::AbstractVector, dataOut::AbstractArray; epochs = 400) #time series
-
-    X = [reshape(Float32[x], 1, 1) for x in dataIn]
-    Y = Matrix(Float32.(dataOut))
-
-    bestloss        = Inf
-    bestmodel       = mNN
-    numincreases    = 0
-    maxnumincreases = 50
-
-    opt_state = Flux.setup(ADAM(1e-2), mNN)
-
-    for epoch in 1:epochs
-        for i in eachindex(X)
-            x = X[i]
-            y = reshape(Y[:, i], :, 1)
-
-            Flux.reset!(mNN)
-            loss, grads = Flux.withgradient(mNN) do model
-                norm(model(x) .- y)
-            end
-            Flux.update!(opt_state, mNN, grads[1])
-        end
-
-        lss = 0.0f0
-        for i in eachindex(X)
-            Flux.reset!(mNN)
-            lss += norm(mNN(X[i]) .- reshape(Y[:, i], :, 1))
-        end
-
-        if lss < 0.95bestloss
-            bestloss  = lss
-            bestmodel = deepcopy(mNN)
-        else numincreases +=1
-        end
-        numincreases > maxnumincreases ? break : nothing
+# Only successive substeps are next-step training pairs (a detection gap can span many steps).
+function recent_sequence(times, dt)
+    for i in length(times):-1:2
+        isapprox(times[i] - times[i-1], dt) || return i:length(times)
     end
-    Flux.loadmodel!(mNN, bestmodel)
+    return 1:length(times)
 end
 
-function predictLSTM(mNN::Chain, dataIn::Vector{Float64}; recal = 20) #time series
-    X = [reshape(Float32[x], 1, 1) for x in dataIn]
-    Flux.reset!(mNN)
-    for i in 1:recal
-        for x in X
-            mNN(x)
-        end
-    end
-
-    res = zeros(2,0)
-    Flux.reset!(mNN)
-    for x in X
-        res = [res Float64.(mNN(x))]
-    end
-
-    return res
-end
-
-
-function predictGP(mNN::Chain, mGP::GPBase, dataIn::Vector{Float64}, id::Int64; minData = 9)
-    if isempty(mGP.y)
-        inputs = reshape(dataIn, 1, :)
-        return GaussianProcesses.mean(mGP.mean, inputs), diag(cov(mGP.kernel, inputs, inputs))
-    end
-    H = length(dataIn)
-    postMean = ones(H)
-    postVar  = zeros(H)
-    
-    Ktt   = cov(mGP.kernel, mGP.x, mGP.x)
-    σω2   = exp(2mGP.logNoise.value)
-
-    ndata = length(mGP.x)
-    Cyy   = inv(Ktt + σω2*Matrix(I, ndata, ndata))
-
-    Y = [y for y in mGP.y]  
-
-    for i in 1:H
-        if length(mGP.x) >= minData
-            h   = dataIn[i]
-            Kth = cov(mGP.kernel, mGP.x, [h;;])
-            Khh = cov(mGP.kernel, [h;;], [h;;])
-
-            postMean[i] = predictLSTM(mNN, [h])[id] + (Kth'*Cyy*(Y - predictLSTM(mNN, mGP.x[:])[id,:]))[1]
-            postVar[i]  = (Khh - Kth'*Cyy*Kth)[1]
+function gp_displacements(gps, times)
+    means = zeros(length(gps), length(times))
+    variances = similar(means)
+    for (axis, gp) in enumerate(gps)
+        if isempty(gp.y)
+            x = reshape(times, 1, :)
+            means[axis, :] = GaussianProcesses.mean(gp.mean, x)
+            variances[axis, :] = diag(cov(gp.kernel, x, x))
         else
-            post, var   = predict_f(mGP, [dataIn[i];;] ; full_cov = true)
-            postMean[i] = post[1]
-            postVar[i]  = var[1]
+            means[axis, :], variances[axis, :] = predict_f(gp, times)
         end
     end
+    return means, variances
+end
 
-    return postMean, postVar
+# Replay observed posterior inputs to reconstruct the hidden state with the current weights.
+# For unobserved future steps the previous RNN output itself becomes the next input.
+function recurrent_priors(network, inputs, horizon)
+    states = network[1](inputs)
+    outputs = network[2](states)
+    state = states[:, end]
+    prior = outputs[:, end]
+    future = zeros(Float64, 2, horizon)
+    future[:, 1] = prior
+    for h in 2:horizon
+        hidden, state = network[1].cell(prior, state)
+        prior = network[2](hidden)
+        future[:, h] = prior
+    end
+    return outputs, future
+end
+
+function predict_displacements(model::DisplacementRNN, gps, times, dt; minData=9)
+    means, variances = gp_displacements(gps, times)
+    observed = vec(gps[1].x)
+    recent = recent_sequence(observed, dt)
+    if isempty(times) || length(recent) < minData || !isapprox(times[1] - last(observed), dt)
+        return means, variances
+    end
+    all(h -> isapprox(times[h] - times[h-1], dt), 2:length(times)) ||
+        throw(ArgumentError("RNN forecasts require consecutive obstacle substeps"))
+
+    history, future = recurrent_priors(model.network, model.posterior_inputs[:, recent], length(times))
+    for (axis, gp) in enumerate(gps)
+        # Eq. (8) uses the mean at BOTH the training inputs and the query inputs.
+        # Use the prescribed mean during warm-up and outside this contiguous sequence.
+        prior = GaussianProcesses.mean(gp.mean, gp.x)
+        prior[first(recent)+minData:last(recent)] .= history[axis, minData:end-1]
+        cross_cov = cov(gp.kernel, gp.x, reshape(times, 1, :))
+        means[axis, :] = future[axis, :] + cross_cov' * (gp.cK \ (gp.y - prior))
+    end
+    return means, variances
+end
+
+function train_displacement_rnn!(network, inputs, targets; epochs=400)
+    optimizer = Flux.setup(ADAM(1e-2), network)
+    best = deepcopy(network)
+    bestloss = Flux.mse(network(inputs), targets)
+    reference_loss = bestloss
+    stale = 0
+    for _ in 1:epochs
+        grads = Flux.gradient(net -> Flux.mse(net(inputs), targets), network)
+        Flux.update!(optimizer, network, grads[1])
+        loss = Flux.mse(network(inputs), targets)
+        if loss < bestloss
+            bestloss = loss
+            Flux.loadmodel!(best, network)
+        end
+        if loss < 0.95f0 * reference_loss
+            reference_loss = loss
+            stale = 0
+        else
+            stale += 1
+            stale >= 50 && break
+        end
+    end
+    Flux.loadmodel!(network, best)
+end
+
+function Detection!(robo::robot, obs::obstacle, gps::Vector{GPBase}, model::DisplacementRNN; minData=9, maxData=60)
+    isempty(obs.time) && return
+    norm(robo.pose[1:2] - obs.posn) < robo.R || return
+    dt = robo.T / obs.ns
+    first_new = isempty(gps[1].y) ? 1 : searchsortedlast(obs.time, last(gps[1].x)) + 1
+    first_new > length(obs.time) && return
+    new_samples = first_new:length(obs.time)
+    # Keep the existing GP window policy; the RNN history uses exactly the same indices.
+    drop = length(gps[1].y) > maxData ? length(new_samples) : 0
+    for j in new_samples
+        t = obs.time[j]
+        posterior, _ = predict_displacements(model, gps, [t], dt; minData)
+        keep = (j == first_new ? drop + 1 : 1):length(gps[1].y)
+        for (axis, gp) in enumerate(gps)
+            times = [vec(gp.x)[keep]; t]
+            values = [gp.y[keep]; obs.δpos[axis, j]]
+            gps[axis] = GPE(reshape(times, 1, :), values, gp.mean, gp.kernel, gp.logNoise)
+        end
+        model.posterior_inputs = hcat(model.posterior_inputs[:, keep], Float32.(posterior))
+    end
+
+    for gp in gps
+        if length(gp.y) >= minData
+            gp.kernel.iℓ2[1] = 1.
+            gp.logNoise.value = -2.
+            gp.kernel.σ2 = 1.
+            GaussianProcesses.optimize!(gp, domean=false, kern=true, noise=true,
+                noisebounds=[-3., -1.], kernbounds=[[-5., -5.], [5., 5.]], method=Optim.NelderMead())
+        else
+            GaussianProcesses.optimize!(gp, domean=true, kern=true, noise=true,
+                noisebounds=[-3., -1.], kernbounds=[[-5., -5.], [5., 5.]])
+        end
+    end
+    recent = recent_sequence(vec(gps[1].x), dt)
+    if length(recent) >= max(minData, 2)
+        inputs = model.posterior_inputs[:, first(recent):last(recent)-1]
+        targets = Float32.(permutedims(hcat((gp.y[first(recent)+1:last(recent)] for gp in gps)...)))
+        train_displacement_rnn!(model.network, inputs, targets)
+    end
 end

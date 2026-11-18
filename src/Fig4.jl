@@ -7,7 +7,7 @@ const FIG4_CONFIG = (
     xlims=(-5, 45), ylims=(-12, 22), xticks=0:10:40, yticks=-10:10:20,
     annotation=(-3, -10.5), size=(1800, 840),
     extra_notes=[
-        "Two radius-2 m obstacles start at [18, -10] (circle) and [30, 18] (vertical). The vertical obstacle uses velocity [0, -3.5] plus the repository noise implementation, which reinitializes seed 42 each step.",
+        "Two radius-2 m obstacles start at [18, -10] (circle) and [30, 18] (vertical). The vertical obstacle has nominal velocity [0, -3.5] m/s.",
         "Each obstacle has its own GP pair and RNN. Only obstacles within the 20 m detection range contribute constraints at that step.",
         "Uses squared reference-position error minus 10 times the sum of safety margins, with margins bounded to [2, 10] m. The weight 10 matches Fig. 2/3; the original multi-obstacle script uses weight 1, which failed to maintain solvability in this run. The paper does not specify this weight numerically.",
         "The multi-obstacle MPC yaw update is corrected to include speed, as in the previously corrected single-obstacle MPC. Every solve must return a solved and feasible status before controls are applied.",
@@ -22,6 +22,7 @@ function simulate_fig4(config)
     output = figure_output(config)
     mkpath(output)
     Random.seed!(1234)
+    circle_rng, vertical_rng = MersenneTwister(1234), MersenneTwister(42)
     BLAS.set_num_threads(1)
     T, H₊, ns = 0.1, 8, 3
     bounds = polyBound(0.6, -10.0, 20.0, -2.0, 2.0)
@@ -29,7 +30,7 @@ function simulate_fig4(config)
     robo = robot(T, H, H₊, 20.0, 1.9, bounds, [0.0, 2.0, 0.0, 6.0], A, [2.5, 2.5, 1.0, 1.0])
     obstacles = [obstacle(2.0, [18.0, -10.0], ns), obstacle(2.0, [30.0, 18.0], ns)]
     gps = [GPBase[GPE(mean=MeanConst(1.0), kernel=SEArd([1.0], 1.0), logNoise=-2.0) for _ in 1:2] for _ in obstacles]
-    networks = [Chain(RNN(1 => 16, tanh), Dense(16 => 2, tanh)) for _ in obstacles]
+    networks = [DisplacementRNN() for _ in obstacles]
     φ = fill(rectangle_quantile(0.95), H)
     snapshots, rows, diagnostics = Dict{Int, Any}(), Any[], Any[]
     open(joinpath(output, "trajectory.csv"), "w") do csv
@@ -60,8 +61,8 @@ function simulate_fig4(config)
                                 means=deepcopy(means), variances=deepcopy(variances), quantiles=φ)
             end
             run!(robo, [steering[1], acceleration[1]])
-            run_obs!(obstacles[1], k - 1, T, 2)
-            run_obs_topdown!(obstacles[2], k - 1, T)
+            run_obs!(obstacles[1], k - 1, T, 2; rng=circle_rng)
+            run_obs_topdown!(obstacles[2], k - 1, T; rng=vertical_rng)
             after = [rectangle_circle_clearance(robo, obs) for obs in obstacles]
             row = (k, k * T, robo.pose..., obstacles[1].posn..., steering[1], acceleration[1],
                    !isempty(active), minimum(before), minimum(after), diagnostics[end].status, diagnostics[end].feasible,
@@ -69,12 +70,12 @@ function simulate_fig4(config)
             push!(rows, row)
             println(csv, join(row, ','))
             flush(csv)
-            serialize(joinpath(output, "run_state.jls"), (snapshots=snapshots, rows=rows, diagnostics=diagnostics))
+            serialize(joinpath(output, "run_state.jls"), (snapshots=snapshots, rows=rows, diagnostics=diagnostics, velocity_noise_std=1.0))
             println("Step $k/60 | active=$active | solver=$(diagnostics[end].status) | clearance=$(round(minimum(after); digits=3)) m | $(round(time()-started; digits=2)) s")
             flush(stdout)
         end
     end
-    return (snapshots=snapshots, rows=rows, diagnostics=diagnostics)
+    return (snapshots=snapshots, rows=rows, diagnostics=diagnostics, velocity_noise_std=1.0)
 end
 
 result = if "--plot-only" in ARGS
