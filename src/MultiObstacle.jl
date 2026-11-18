@@ -13,10 +13,12 @@ function predict_obstacle!(robo::robot, obs::obstacle, obsGP::Vector{GPBase}, mN
 
     δme, δva = predict_displacements(mNN, obsGP, times, T / ns)
 
+    # Eq. (12): each latent displacement contributes its own observation noise.
+    δva .+= GaussianProcesses.noise_variance.(obsGP)
     δme[:, 1] += obs.posn
     for i in 1:H * ns - 1
         δme[:, i + 1] += δme[:, i]
-        δva[:, i + 1] += δva[:, i] + [exp(2obsGP[1].logNoise.value), exp(2obsGP[2].logNoise.value)]
+        δva[:, i + 1] += δva[:, i]
     end
 
     Pmean = δme[:, [i * ns for i in 1:H]]
