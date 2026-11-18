@@ -86,7 +86,7 @@ for k in 1:L
 
         # Prob = [0.95*0.9^(i-1)  for i in 1:H]
         Prob = [0.95  for i in 1:H]
-        φ    = [quantile(Normal(0.,1.), (1 + Prob[i])/2)  for i in 1:H]
+        φ    = rectangle_quantile.(Prob)
 
         x, y, θ, v, tα, a = nMPC_avoid(robo, obs, Ref, Pmean, Pvar, φ)
         robo.predPose = [x';y';θ';v']

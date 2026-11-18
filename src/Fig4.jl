@@ -30,7 +30,7 @@ function simulate_fig4(config)
     obstacles = [obstacle(2.0, [18.0, -10.0], ns), obstacle(2.0, [30.0, 18.0], ns)]
     gps = [GPBase[GPE(mean=MeanConst(1.0), kernel=SEArd([1.0], 1.0), logNoise=-2.0) for _ in 1:2] for _ in obstacles]
     networks = [Chain(RNN(1 => 16, tanh), Dense(16 => 2, tanh)) for _ in obstacles]
-    φ = fill(quantile(Normal(), 0.975), H)
+    φ = fill(rectangle_quantile(0.95), H)
     snapshots, rows, diagnostics = Dict{Int, Any}(), Any[], Any[]
     open(joinpath(output, "trajectory.csv"), "w") do csv
         println(csv, "step,time,x,y,yaw,speed,obstacle_x,obstacle_y,steering_tangent,acceleration,gp_active,clearance_before,clearance_after,solver_status,solver_feasible,obstacle2_x,obstacle2_y,obstacle1_clearance_before,obstacle1_clearance_after,obstacle2_clearance_before,obstacle2_clearance_after,active_obstacles,solver_attempts")

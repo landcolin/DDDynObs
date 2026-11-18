@@ -1,3 +1,6 @@
+# Proposition 5.1: independent x and y intervals must each cover sqrt(joint_coverage).
+rectangle_quantile(joint_coverage) = quantile(Normal(), (1 + sqrt(joint_coverage)) / 2)
+
 function Detection!(robo::robot, obs::obstacle, obsGP::Vector{GPBase}, mNN::Chain; minData = 9, maxData = 60)
     robo_loca = robo.pose[1:2]
     obs_loca  = obs.posn

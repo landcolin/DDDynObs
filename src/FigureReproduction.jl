@@ -23,7 +23,7 @@ function simulate_figure(config)
     obs = obstacle(2.0, copy(config.obstacle_initial), ns)
     gps = GPBase[GPE(mean=MeanConst(1.0), kernel=SEArd([1.0], 1.0), logNoise=-2.0) for _ in 1:2]
     network = Chain(RNN(1 => 16, tanh), Dense(16 => 2, tanh))
-    φ = fill(quantile(Normal(), 0.975), H)
+    φ = fill(rectangle_quantile(0.95), H)
     snapshots = Dict{Int, Any}()
     rows = Any[]
     diagnostics = Any[]

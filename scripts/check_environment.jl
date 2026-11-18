@@ -47,7 +47,12 @@ function check_environment()
 
     pmean = repeat(obs.posn, 1, robo.H) + [means'; means']
     pvar = [variances'; variances']
-    φ = fill(quantile(Normal(), 0.975), robo.H)
+    for coverage in (0.80, 0.95, 0.99)
+        q = rectangle_quantile(coverage)
+        axis_probability = cdf(Normal(), q) - cdf(Normal(), -q)
+        @assert isapprox(axis_probability^2, coverage; atol=1e-12, rtol=0)
+    end
+    φ = fill(rectangle_quantile(0.95), robo.H)
     solution = nMPC_avoid(robo, obs, ref, pmean, pvar, φ)
     @assert all(values -> all(isfinite, values), solution)
     println("PASS: obstacle-avoidance optimization")

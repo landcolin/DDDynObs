@@ -107,7 +107,7 @@ for k in 1:L
 
     Ref = [[6(k + i - 1) * T, 2.] for i in 1:H₊]
     Prob = [0.95 for _ in 1:H]
-    φ = [quantile(Normal(0., 1.), (1 + Prob[i]) / 2) for i in 1:H]
+    φ = rectangle_quantile.(Prob)
 
     active_ids = [i for i in eachindex(obs_list) if norm(robo.pose[1:2] - obs_list[i].posn) < robo.R]
 
